@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Distribution / packaging
+*.so
+*.whl
+
+# Logs & outputs
+*.log
+outputs/
+output/
+output_*/
+data_process/anno_outputs/
+
+# Model weights & checkpoints
+*.pth
+*.pt
+*.safetensors
+*.ckpt
+*.bin
+
+# Data files
+*.npz
+*.npy
+*.h5
+*.hdf5
+
+# Test samples (download from Google Drive)
+tests/samples/demo_data/
+
+# Media outputs (generated videos/images)
+*.mp4
+*.avi
+*.gif
+*.png
+*.jpg
+*.jpeg
+
+# Config overrides (keep .example.yaml, ignore real configs with secrets/paths)
+continuous_simulation/configs/env_paths.yaml
+continuous_simulation/configs/project.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
