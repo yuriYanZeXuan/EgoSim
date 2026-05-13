@@ -1,11 +1,21 @@
-import torch
-from PIL import Image
-from diffsynth.utils.data import save_video, VideoData
-from diffsynth.pipelines.wan_video import WanVideoPipeline, ModelConfig
-from modelscope import dataset_snapshot_download
-dataset_snapshot_download(
-    dataset_id="DiffSynth-Studio/examples_in_diffsynth",
-    local_dir="./",
-    allow_file_pattern=f"data/examples/wan/input_image.jpg"
+from openai import OpenAI
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+API_KEY = os.getenv("KIMI_KEY")
+print(API_KEY)
+client = OpenAI(
+    api_key = API_KEY,
+    base_url = "https://api.moonshot.cn/v1",
 )
-image = Image.open("data/examples/wan/input_image.jpg")
+
+completion = client.chat.completions.create(
+    model = "kimi-k2.6",
+    messages = [
+        {"role": "system", "content": "你是 Kimi，由 Moonshot AI 提供的人工智能助手，你更擅长中文和英文的对话。你会为用户提供安全，有帮助，准确的回答。同时，你会拒绝一切涉及恐怖主义，种族歧视，黄色暴力等问题的回答。Moonshot AI 为专有名词，不可翻译成其他语言。"},
+        {"role": "user", "content": "你好，我叫李雷，1+1等于多少？"}
+    ]
+)
+
+print(completion.choices[0].message.content)

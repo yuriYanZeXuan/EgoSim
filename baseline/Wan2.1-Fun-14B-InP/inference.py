@@ -31,7 +31,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from baseline.data import egodex, egovid, continuous
-
+import torch.distributed as dist
 
 def _path_is_project_root(path: str) -> bool:
     try:
@@ -95,13 +95,13 @@ def load_pipeline(model_root: str, device: str) -> WanVideoPipeline:
         ModelConfig(path=str(model_root / "models_t5_umt5-xxl-enc-bf16.pth")),
         ModelConfig(path=str(model_root / "Wan2.1_VAE.pth")),
         ModelConfig(path=str(model_root / "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth")),
-        ModelConfig(path=str(tokenizer_path)),
     ]
 
     print(f"[INFO] Loading Wan2.1-Fun-14B-InP from {model_root} on {device} ...")
     pipe = WanVideoPipeline.from_pretrained(
         torch_dtype=torch.bfloat16,
         device=device,
+        use_usp=True,
         model_configs=model_configs,
         tokenizer_config=ModelConfig(path=str(tokenizer_path)),
     )
@@ -140,34 +140,29 @@ def run_inference(args: argparse.Namespace) -> None:
             skipped += 1
             continue
 
-        try:
-            first_frame_path = loader.get_first_frame_path(args.dataset_root, sample)
-            if not first_frame_path.exists():
-                print(f"  [WARN] Missing first frame: {first_frame_path}")
-                failed += 1
-                continue
-
-            first_frame = Image.open(first_frame_path).convert("RGB")
-
-            video = pipe(
-                prompt=sample.prompt,
-                input_image=first_frame,
-                negative_prompt=args.negative_prompt,
-                height=args.height,
-                width=args.width,
-                num_frames=args.num_frames,
-                num_inference_steps=args.num_inference_steps,
-                cfg_scale=args.cfg_scale,
-                seed=args.seed,
-                tiled=args.tiled,
-            )
-
-            imageio.mimwrite(str(out_path), video, fps=args.fps, quality=8)
-            success += 1
-
-        except Exception as exc:
-            print(f"  [ERROR] {sample.output_id}: {exc}")
+        first_frame_path = loader.get_first_frame_path(args.dataset_root, sample)
+        if not first_frame_path.exists():
+            print(f"  [WARN] Missing first frame: {first_frame_path}")
             failed += 1
+            continue
+
+        first_frame = Image.open(first_frame_path).convert("RGB")
+
+        video = pipe(
+            prompt=sample.prompt,
+            input_image=first_frame,
+            negative_prompt=args.negative_prompt,
+            height=args.height,
+            width=args.width,
+            num_frames=args.num_frames,
+            num_inference_steps=args.num_inference_steps,
+            cfg_scale=args.cfg_scale,
+            seed=args.seed,
+            tiled=args.tiled,
+        )
+        if dist.get_rank() == 0:
+            imageio.mimwrite(str(out_path), video, fps=args.fps, quality=8)
+        success += 1
 
     print(
         f"[INFO] Done. success={success}, skipped={skipped}, failed={failed}, "

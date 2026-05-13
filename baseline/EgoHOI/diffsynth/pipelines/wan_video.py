@@ -6,7 +6,7 @@ from ..models.wan_video_vae import WanVideoVAE
 from ..models.wan_video_image_encoder import WanImageEncoder
 from ..schedulers.flow_match import FlowMatchScheduler
 from .base import BasePipeline
-from ..prompters import WanPrompter
+from ..prompters.wan_prompter import WanPrompter
 import torch, os
 from einops import rearrange
 import numpy as np
@@ -19,6 +19,18 @@ from ..vram_management import enable_vram_management, AutoWrappedModule, AutoWra
 from ..models.wan_video_text_encoder import T5RelativeEmbedding, T5LayerNorm
 from ..models.wan_video_dit import RMSNorm, sinusoidal_embedding_1d
 from ..models.wan_video_vae import RMS_norm, CausalConv3d, Upsample
+
+
+def enable_unified_sequence_parallel(pipe):
+    from xfuser.core.distributed import get_sequence_parallel_world_size
+    from ..distributed.xdit_context_parallel import usp_attn_forward, usp_dit_forward
+
+    for block in pipe.dit.blocks:
+        block.self_attn.forward = types.MethodType(usp_attn_forward, block.self_attn)
+    pipe.dit.forward = types.MethodType(usp_dit_forward, pipe.dit)
+    pipe.sp_size = get_sequence_parallel_world_size()
+    pipe.use_unified_sequence_parallel = True
+    return pipe
 
 
 
@@ -35,6 +47,7 @@ class WanVideoPipeline(BasePipeline):
         self.model_names = ['text_encoder', 'dit', 'vae']
         self.height_division_factor = 16
         self.width_division_factor = 16
+        self.use_unified_sequence_parallel = False
 
 
     def enable_vram_management(self, num_persistent_param_in_dit=None):
@@ -137,16 +150,22 @@ class WanVideoPipeline(BasePipeline):
 
 
     @staticmethod
-    def from_model_manager(model_manager: ModelManager, torch_dtype=None, device=None):
+    def from_model_manager(model_manager: ModelManager, torch_dtype=None, device=None, use_usp=False):
         if device is None: device = model_manager.device
         if torch_dtype is None: torch_dtype = model_manager.torch_dtype
         pipe = WanVideoPipeline(device=device, torch_dtype=torch_dtype)
         pipe.fetch_models(model_manager)
+        if use_usp:
+            enable_unified_sequence_parallel(pipe)
         return pipe
     
     
     def denoising_model(self):
         return self.dit
+
+
+    def prepare_unified_sequence_parallel(self):
+        return {"use_unified_sequence_parallel": self.use_unified_sequence_parallel}
 
 
     def encode_prompt(self, prompt, positive=True):
@@ -582,14 +601,7 @@ class WanUniAnimateVideoPipeline(BasePipeline):
         pipe.fetch_models(model_manager)
 
         if use_usp:
-            from xfuser.core.distributed import get_sequence_parallel_world_size
-            from ..distributed.xdit_context_parallel import usp_attn_forward, usp_dit_forward
-
-            for block in pipe.dit.blocks:
-                block.self_attn.forward = types.MethodType(usp_attn_forward, block.self_attn)
-            pipe.dit.forward = types.MethodType(usp_dit_forward, pipe.dit)
-            pipe.sp_size = get_sequence_parallel_world_size()
-            pipe.use_unified_sequence_parallel = True
+            enable_unified_sequence_parallel(pipe)
 
         return pipe
     

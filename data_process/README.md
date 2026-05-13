@@ -38,7 +38,7 @@ Organized in the order: `00_first_frame_mask_inpaint` â†’ `01_depth_pose_da3` â†
 ## 3. Clone Source Repos
 
 ```bash
-REPOS_DIR="<your_repos_dir>"   # e.g. ~/repos
+REPOS_DIR="./repos"   # e.g. ~/repos
 mkdir -p "${REPOS_DIR}" && cd "${REPOS_DIR}"
 
 # Depth-Anything-3
@@ -131,6 +131,7 @@ pip install qwen-vl-utils
 ```
 
 ---
+modelscope download --model facebook/sam3 sam3.pt --local_dir ${REPOS_DIR}/sam3/checkpoints
 
 ## 5. Model Checkpoints
 

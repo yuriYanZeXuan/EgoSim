@@ -40,6 +40,38 @@ DTYPE_MAP = {
 }
 
 
+def _dist_is_initialized() -> bool:
+    return torch.distributed.is_available() and torch.distributed.is_initialized()
+
+
+def _is_main_process() -> bool:
+    return not _dist_is_initialized() or torch.distributed.get_rank() == 0
+
+
+def initialize_usp(args) -> None:
+    if not getattr(args, "use_usp", False):
+        return
+    if not torch.cuda.is_available():
+        raise RuntimeError("--use_usp requires CUDA.")
+    if not _dist_is_initialized():
+        from xfuser.core.distributed import initialize_model_parallel, init_distributed_environment
+
+        torch.distributed.init_process_group(backend="nccl", init_method="env://")
+        init_distributed_environment(
+            rank=torch.distributed.get_rank(),
+            world_size=torch.distributed.get_world_size(),
+        )
+        initialize_model_parallel(
+            sequence_parallel_degree=torch.distributed.get_world_size(),
+            ring_degree=1,
+            ulysses_degree=torch.distributed.get_world_size(),
+        )
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
+    args.device = f"cuda:{local_rank}"
+    args.disable_multiprocessing = True
+
+
 def resolve_torch_dtype(dtype_name: str) -> torch.dtype:
     try:
         return DTYPE_MAP[dtype_name]
@@ -156,6 +188,7 @@ def parse_args():
         default=None,
         help="Override pose sequence directory root (expects <root>/<clip_id> with pose frames).",
     )
+    parser.add_argument("--use_usp", action="store_true", help="Enable Unified Sequence Parallel. Launch with torchrun.")
     return parser.parse_args()
 
 
@@ -660,8 +693,9 @@ def run_single_clip_inference(
         pipe.vae.to(device=device, dtype=torch_dtype).eval()
     frames = pipe.decode_video(latents, **tiler_kwargs)
     video_frames = pipe.tensor2video(frames[0])
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    save_video(video_frames, output_path, fps=args.output_fps)
+    if _is_main_process():
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        save_video(video_frames, output_path, fps=args.output_fps)
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
@@ -697,6 +731,7 @@ def initialize_models(args, device: torch.device, torch_dtype: torch.dtype):
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
         model_VAE=model_VAE,
+        use_usp=getattr(args, "use_usp", False),
     )
     train_model.use_gradient_checkpointing = False
     train_model.use_gradient_checkpointing_offload = False
@@ -905,6 +940,7 @@ def run_parallel_inference(
 
 def main():
     args = parse_args()
+    initialize_usp(args)
     torch_dtype = resolve_torch_dtype(args.torch_dtype)
 
     if not os.path.isdir(args.dataset_path):
@@ -943,7 +979,7 @@ def main():
         print(summary)
         return
 
-    devices = determine_worker_devices(args)
+    devices = [args.device] if args.use_usp else determine_worker_devices(args)
     if args.disable_multiprocessing or len(tasks) == 1:
         devices = [devices[0]]
     if len(devices) == 1:

@@ -436,6 +436,7 @@ class LightningModelForTrain_onestage(pl.LightningModule):
         pretrained_lora_path=None,
         model_VAE=None,
         debug_shapes=False,
+        use_usp=False,
         # 
     ):
         super().__init__()
@@ -447,7 +448,7 @@ class LightningModelForTrain_onestage(pl.LightningModule):
             dit_path = dit_path.split(",")
             model_manager.load_models([dit_path])
         
-        self.pipe = WanVideoPipeline.from_model_manager(model_manager)
+        self.pipe = WanVideoPipeline.from_model_manager(model_manager, use_usp=use_usp)
         self.pipe.scheduler.set_timesteps(1000, training=True)
 
         self.pipe_VAE = model_VAE.pipe.eval()
@@ -946,6 +947,24 @@ class LightningModelForTrain_onestage(pl.LightningModule):
             else:
                 camera_full = camera_tokens
 
+        use_unified_sequence_parallel = getattr(self.pipe, "use_unified_sequence_parallel", False)
+        if use_unified_sequence_parallel:
+            import torch.distributed as dist
+            from xfuser.core.distributed import (
+                get_sequence_parallel_rank,
+                get_sequence_parallel_world_size,
+                get_sp_group,
+            )
+
+            if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+                sp_size = get_sequence_parallel_world_size()
+                sp_rank = get_sequence_parallel_rank()
+                x = torch.chunk(x, sp_size, dim=1)[sp_rank]
+                if camera_full is not None:
+                    camera_full = torch.chunk(camera_full, sp_size, dim=1)[sp_rank]
+            else:
+                use_unified_sequence_parallel = False
+
         def create_custom_forward(module):
             def custom_forward(*inputs):
                 return module(*inputs)
@@ -980,6 +999,9 @@ class LightningModelForTrain_onestage(pl.LightningModule):
                     )
             else:
                 x = block(x, context, t_mod, freqs)
+
+        if use_unified_sequence_parallel:
+            x = get_sp_group().all_gather(x, dim=1)
 
         x_main = x[:, :main_token_len]
         x_main = model.head(x_main, t)

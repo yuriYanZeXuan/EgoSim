@@ -37,6 +37,38 @@ from egohoi.inference import (  # noqa: E402
 from infer import initialize_models, prepare_device, resolve_torch_dtype  # noqa: E402
 
 
+def _dist_is_initialized() -> bool:
+    return torch.distributed.is_available() and torch.distributed.is_initialized()
+
+
+def _is_main_process() -> bool:
+    return not _dist_is_initialized() or torch.distributed.get_rank() == 0
+
+
+def _initialize_usp(args: argparse.Namespace) -> None:
+    if not args.use_usp:
+        return
+    if not torch.cuda.is_available():
+        raise RuntimeError("--use_usp requires CUDA.")
+    if not _dist_is_initialized():
+        from xfuser.core.distributed import initialize_model_parallel, init_distributed_environment
+
+        torch.distributed.init_process_group(backend="nccl", init_method="env://")
+        init_distributed_environment(
+            rank=torch.distributed.get_rank(),
+            world_size=torch.distributed.get_world_size(),
+        )
+        initialize_model_parallel(
+            sequence_parallel_degree=torch.distributed.get_world_size(),
+            ring_degree=1,
+            ulysses_degree=torch.distributed.get_world_size(),
+        )
+    local_rank = int(os.environ.get("LOCAL_RANK", args.gpu_id))
+    torch.cuda.set_device(local_rank)
+    args.gpu_id = local_rank
+    args.device = f"cuda:{local_rank}"
+
+
 def _resolve_dataset_loader(dataset: str):
     loaders = {
         "egodex": egodex,
@@ -276,8 +308,9 @@ def run_sample_inference(
         pipe.vae.to(device=device, dtype=torch_dtype).eval()
     frames = pipe.decode_video(latents, **tiler_kwargs)
     video_frames = pipe.tensor2video(frames[0])
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    save_video(video_frames, str(output_path), fps=args.fps)
+    if _is_main_process():
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        save_video(video_frames, str(output_path), fps=args.fps)
 
 
 def _default_model_file(model_root: str, filename: str) -> str:
@@ -321,6 +354,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keep_modules_on_device", action="store_true")
     parser.add_argument("--denoise_progress", action="store_true")
     parser.add_argument("--debug_conditions", action="store_true")
+    parser.add_argument("--use_usp", action="store_true", help="Enable Unified Sequence Parallel. Launch with torchrun.")
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--rank", type=int, default=0)
     parser.add_argument("--world_size", type=int, default=1)
@@ -343,6 +377,7 @@ def _finalize_weight_args(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = parse_args()
+    _initialize_usp(args)
     _finalize_weight_args(args)
     set_seed(args.seed)
 
@@ -350,7 +385,10 @@ def main() -> None:
     all_samples = _load_samples(args)
     if args.max_samples is not None:
         all_samples = all_samples[: args.max_samples]
-    samples = [sample for idx, sample in enumerate(all_samples) if idx % args.world_size == args.rank]
+    if args.use_usp:
+        samples = all_samples
+    else:
+        samples = [sample for idx, sample in enumerate(all_samples) if idx % args.world_size == args.rank]
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -362,7 +400,8 @@ def main() -> None:
     success = 0
     skipped = 0
     failed = 0
-    for global_idx, sample in enumerate(tqdm(samples, desc=f"[EgoHOI:{args.dataset}]", dynamic_ncols=True)):
+    disable_progress = args.use_usp and not _is_main_process()
+    for global_idx, sample in enumerate(tqdm(samples, desc=f"[EgoHOI:{args.dataset}]", dynamic_ncols=True, disable=disable_progress)):
         output_path = output_dir / f"{sample.output_id}.mp4"
         if args.skip_existing and output_path.exists():
             skipped += 1
@@ -380,9 +419,11 @@ def main() -> None:
             success += 1
         except Exception as exc:  # pylint: disable=broad-except
             failed += 1
-            print(f"  [ERROR] {sample.output_id}: {exc}")
+            if _is_main_process():
+                print(f"  [ERROR] {sample.output_id}: {exc}")
 
-    print(f"[INFO] Done. success={success}, skipped={skipped}, failed={failed}, total={len(samples)}")
+    if _is_main_process():
+        print(f"[INFO] Done. success={success}, skipped={skipped}, failed={failed}, total={len(samples)}")
 
 
 if __name__ == "__main__":

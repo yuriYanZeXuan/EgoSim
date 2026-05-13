@@ -31,3 +31,4 @@ models/
 *.ckpt
 *.bin
 *.safetensors
+examples.zip
