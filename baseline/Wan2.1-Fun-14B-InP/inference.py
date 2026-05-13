@@ -14,6 +14,7 @@ Example:
         --model_root ./Wan2.1-Fun-14B-InP
 """
 import argparse
+import importlib
 import os
 import sys
 from pathlib import Path
@@ -23,13 +24,39 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
-# Ensure project root is on path so we can import the main diffsynth
+# Keep the project root importable for baseline.data, but do not let the local
+# EgoSim/diffsynth shadow an installed diffsynth package for this baseline.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from diffsynth.pipelines.wan_video_new import WanVideoPipeline, ModelConfig
 from baseline.data import egodex, egovid, continuous
+
+
+def _path_is_project_root(path: str) -> bool:
+    try:
+        return Path(path or os.getcwd()).resolve() == _PROJECT_ROOT
+    except OSError:
+        return False
+
+
+def _import_external_wan_pipeline():
+    original_sys_path = list(sys.path)
+    try:
+        sys.path = [path for path in sys.path if not _path_is_project_root(path)]
+        for module_name in list(sys.modules):
+            if module_name == "diffsynth" or module_name.startswith("diffsynth."):
+                module_file = getattr(sys.modules[module_name], "__file__", "")
+                if module_file and Path(module_file).resolve().is_relative_to(_PROJECT_ROOT):
+                    del sys.modules[module_name]
+        importlib.invalidate_caches()
+        wan_video = importlib.import_module("diffsynth.pipelines.wan_video")
+        return wan_video.WanVideoPipeline, wan_video.ModelConfig
+    finally:
+        sys.path = original_sys_path
+
+
+WanVideoPipeline, ModelConfig = _import_external_wan_pipeline()
 
 
 def _resolve_dataset_loader(dataset: str):
@@ -46,6 +73,8 @@ def _resolve_dataset_loader(dataset: str):
 def load_pipeline(model_root: str, device: str) -> WanVideoPipeline:
     """Load Wan2.1-Fun-14B-InP pipeline from local model directory."""
     model_root = Path(model_root)
+    diffsynth_module = importlib.import_module("diffsynth")
+    print(f"[INFO] Using diffsynth from {getattr(diffsynth_module, '__file__', 'unknown')}")
     required = [
         "diffusion_pytorch_model.safetensors",
         "models_t5_umt5-xxl-enc-bf16.pth",

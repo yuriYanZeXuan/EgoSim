@@ -1,49 +1,48 @@
 #!/bin/bash
-# EgoHOI Wan2.1 zero-shot baseline on demo_data.
-# Produces first-frame + prompt videos for direct comparison with EgoHOI.
+# EgoHOI baseline on EgoSim demo metadata.
 
 set -e
 
 MODEL_ROOT="${MODEL_ROOT:-./Wan2.1-Fun-14B-InP}"
+CHECKPOINT="${CHECKPOINT:-${EGOHOI_CHECKPOINT:-}}"
+DATA_ROOT="${DATA_ROOT:-tests/samples/demo_data}"
 GPU_ID="${GPU_ID:-0}"
+NUM_INFERENCE_STEPS="${NUM_INFERENCE_STEPS:-50}"
+HEIGHT="${HEIGHT:-480}"
+WIDTH="${WIDTH:-480}"
+NUM_FRAMES="${NUM_FRAMES:-81}"
+FPS="${FPS:-24}"
+
+if [ -z "$CHECKPOINT" ]; then
+  echo "[EgoHOI-baseline] ERROR: set CHECKPOINT or EGOHOI_CHECKPOINT to the EgoHOI finetuned checkpoint."
+  exit 1
+fi
+
+COMMON_ARGS=(
+  --model_root "$MODEL_ROOT"
+  --checkpoint "$CHECKPOINT"
+  --gpu_id "$GPU_ID"
+  --num_inference_steps "$NUM_INFERENCE_STEPS"
+  --height "$HEIGHT"
+  --width "$WIDTH"
+  --num_frames "$NUM_FRAMES"
+  --fps "$FPS"
+)
 
 echo "[EgoHOI-baseline] Running egodex ..."
-PYTHONPATH=. python baseline/Wan2.1-Fun-14B-InP/inference.py \
+PYTHONPATH=. python baseline/EgoHOI/inference.py \
   --dataset egodex \
-  --dataset_root demo_data/egodex \
-  --metadata_path demo_data/egodex_metadata.csv \
+  --dataset_root "$DATA_ROOT/egodex" \
+  --metadata_path "$DATA_ROOT/egodex_metadata.csv" \
   --output_dir baseline/EgoHOI/outputs/egodex \
-  --model_root "$MODEL_ROOT" \
-  --gpu_id "$GPU_ID" \
-  --num_inference_steps 50 \
-  --height 480 \
-  --width 832 \
-  --num_frames 81
+  "${COMMON_ARGS[@]}"
 
 echo "[EgoHOI-baseline] Running egovid ..."
-PYTHONPATH=. python baseline/Wan2.1-Fun-14B-InP/inference.py \
+PYTHONPATH=. python baseline/EgoHOI/inference.py \
   --dataset egovid \
-  --dataset_root demo_data/egovid \
-  --metadata_path demo_data/egovid_metadata.csv \
+  --dataset_root "$DATA_ROOT/egovid" \
+  --metadata_path "$DATA_ROOT/egovid_metadata.csv" \
   --output_dir baseline/EgoHOI/outputs/egovid \
-  --model_root "$MODEL_ROOT" \
-  --gpu_id "$GPU_ID" \
-  --num_inference_steps 50 \
-  --height 480 \
-  --width 832 \
-  --num_frames 81
-
-echo "[EgoHOI-baseline] Running continuous_generation ..."
-PYTHONPATH=. python baseline/Wan2.1-Fun-14B-InP/inference.py \
-  --dataset continuous_generation \
-  --dataset_root demo_data/continuous_generation \
-  --metadata_path demo_data/continuous_generation/metadata.csv \
-  --output_dir baseline/EgoHOI/outputs/continuous_generation \
-  --model_root "$MODEL_ROOT" \
-  --gpu_id "$GPU_ID" \
-  --num_inference_steps 50 \
-  --height 480 \
-  --width 832 \
-  --num_frames 81
+  "${COMMON_ARGS[@]}"
 
 echo "[EgoHOI-baseline] All done. Outputs under baseline/EgoHOI/outputs/"
